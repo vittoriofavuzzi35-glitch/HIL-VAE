@@ -29,7 +29,7 @@
 #define PROT_MAGIA_LOG    0x4E364C4Du   /* "ML6N": messaggio di testo scheda -> PC */
 #define PROT_VERSIONE     1u
 
-#define PROT_N_INGRESSO   64            /* float, come cervello_passo */
+#define PROT_N_INGRESSO   64            /* float, come osservazione_passo */
 #define PROT_N_AZIONI     4
 
 /* Le strutture viaggiano cosi' come sono: campi a 4 byte, nessun
