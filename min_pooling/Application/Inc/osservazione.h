@@ -1,8 +1,33 @@
-/* Costruzione del vettore di osservazione di bordo — uni_arco_v6.
+/* Costruzione del vettore di osservazione di bordo.
  *
- *   [   0:  48]  propriocettive
- *   [  48:  60]  12 settori ToF RITARDATI / tof_obs_scale
- *   [  60:1084]  mappa 32x32 in log-odds / map_logodds_clamp
+ * DUE LAYOUT, scelti a compilazione. Non e' una comodita': sono i due
+ * rami della tesi, e devono poter convivere nello stesso albero senza
+ * che toccare l'uno muova l'altro.
+ *
+ *   senza OSS_SENZA_SETTORI          uni_arco_v6, min pooling
+ *     [   0:  48]  propriocettive
+ *     [  48:  60]  12 settori ToF RITARDATI / tof_obs_scale
+ *     [  60:1084]  mappa 32x32 in log-odds / map_logodds_clamp
+ *                                                      totale 1084
+ *
+ *   con OSS_SENZA_SETTORI            uni_vae_senza_settori
+ *     [   0:  48]  propriocettive
+ *     [  48:1072]  mappa 32x32 in log-odds
+ *                                                      totale 1072
+ *     piu' 64 latenti che aggiunge nodo_bordo_vae -> 1136
+ *
+ * I SETTORI SPARISCONO SOLO DALL'OSSERVAZIONE, non dalla catena: la
+ * mappa continua a costruirsi dai settori CORRENTI (tof_cur), su
+ * entrambi i rami. Quello che non entra piu' e' la lettura RITARDATA.
+ * Di conseguenza sul ramo VAE il ritardo di un passo non serve: esisteva
+ * solo per questo vettore.
+ *
+ * PERCHE' IL LAYOUT SI SCRIVE QUI E NON SI RICOPIA. Il vettore si riempie
+ * in sequenza con u[n++], quindi togliere un blocco sposta da se' tutto
+ * quello che segue. Il pericolo non e' qui: e' in chi INDICIZZA il
+ * vettore dall'esterno — preprocessore*.h e le costanti di
+ * nodo_bordo_vae.c — che vanno rigenerati insieme. Un disallineamento fra
+ * layout e rete non da' nessun errore: da' numeri plausibili.
  *
  * COSA ARRIVA DA FUORI e cosa si mantiene qui dentro. Da fuori: la posa e le
  * velocita' (Vicon), la coda di waypoint con l'indice corrente (logica di
@@ -24,7 +49,15 @@
 #define OSS_BASE       48
 #define OSS_N_TOF      12
 #define OSS_N_MAPPA    (MAPPA_CELLE * MAPPA_CELLE)
-#define OSS_TOTALE     (OSS_BASE + OSS_N_TOF + OSS_N_MAPPA)   /* 1084 */
+
+/* Quanti settori finiscono NELL'OSSERVAZIONE. Zero sul ramo VAE; la
+ * mappa ne usa dodici comunque, su entrambi i rami. */
+#if defined(OSS_SENZA_SETTORI)
+  #define OSS_N_TOF_OSS  0
+#else
+  #define OSS_N_TOF_OSS  OSS_N_TOF
+#endif
+#define OSS_TOTALE     (OSS_BASE + OSS_N_TOF_OSS + OSS_N_MAPPA)  /* 1084 o 1072 */
 #define OSS_MAX_WP     8
 #define OSS_N_AZIONI   4
 
@@ -83,7 +116,11 @@ typedef struct {
     float wp_yaw[OSS_MAX_WP];
     int   wp_idx;
     float room_min[3], room_max[3];
-    float tof_obs[OSS_N_TOF];        /* lettura RITARDATA, va in osservazione */
+    float tof_obs[OSS_N_TOF];        /* lettura RITARDATA, va in osservazione.
+                                      * Con OSS_SENZA_SETTORI non si legge:
+                                      * su quel ramo il campo c'e' ma e'
+                                      * ignorato, e chi lo riempie puo'
+                                      * risparmiarselo. */
     float tof_cur[OSS_N_TOF];        /* lettura CORRENTE, va nella mappa */
     float prev_azioni[OSS_N_AZIONI];
 } osservazione_ingresso_t;

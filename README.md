@@ -4,7 +4,7 @@ I controllori della tesi che girano sulla **NUCLEO-N657X0-Q**: ricevono
 dall'UART cio' che il drone non sa da se', costruiscono l'osservazione,
 fanno girare la rete sull'acceleratore Neural-ART e rispondono con le
 quattro azioni. Dall'altra parte del cavo c'e' Isaac Lab, nel repository
-della tesi, che aggancia questo come submodule in `deploy/scheda/`.
+della tesi, che aggancia questo come submodule in `HIL/scheda/`.
 
     min_pooling/   il ramo v6: dodici settori di min pooling
     vae/           il ramo definitivo: 64 latenti al posto dei settori
@@ -91,10 +91,14 @@ errore, da' una scheda che risponde male.
 
 ## Cosa NON e' qui
 
-Il codice sorgente condiviso — protocollo, osservazione, mappa, settori,
-nodi — vive anche in `deploy/` del repository della tesi, che e' la
-copia da cui si parte. Qui dentro c'e' quella **compilata**, insieme al
-codice generato da ST Edge AI (`rete.c`, `network.c`, `stai_*`), che si
+Il codice generato da ST Edge AI (`rete.c`, `network.c`, `stai_*`) si
 rigenera dall'ONNX e non si scrive a mano.
+
+**Del C di bordo questa e' invece la copia UNICA.** Il repository della
+tesi non ne tiene piu' una propria: la sua scheda finta — quella che fa
+girare l'anello HIL sul PC senza hardware — compila *questi* file, presi
+da qui. Era duplicato fino al 17/10, e le due copie avevano gia'
+cominciato a separarsi: `min_pooling/Application/Inc/osservazione.h` era
+rimasto indietro di una versione. Con una copia sola non puo' succedere.
 
 Le build (`Debug/`, `Release/`) non sono versionate.
