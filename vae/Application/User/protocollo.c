@@ -30,6 +30,13 @@ void prot_firma_richiesta_vae(prot_richiesta_vae_t *r)
     r->crc = prot_crc32(r, SENZA_CRC(prot_richiesta_vae_t));
 }
 
+void prot_firma_richiesta_pool(prot_richiesta_pool_t *r)
+{
+    r->magia = PROT_MAGIA_RICH_POOL;
+    r->versione = PROT_VERSIONE;
+    r->crc = prot_crc32(r, SENZA_CRC(prot_richiesta_pool_t));
+}
+
 void prot_firma_risposta(prot_risposta_t *r)
 {
     r->magia = PROT_MAGIA_RISP;
@@ -68,6 +75,18 @@ int prot_richiesta_vae_valida(const prot_richiesta_vae_t *r)
     if (r->magia != PROT_MAGIA_RICH_VAE) return -1;
     if (r->versione != PROT_VERSIONE) return -2;
     if (r->crc != prot_crc32(r, SENZA_CRC(prot_richiesta_vae_t))) return -3;
+    return 0;
+}
+
+int prot_richiesta_pool_valida(const prot_richiesta_pool_t *r)
+{
+    /* Stessi controlli e stesso ordine degli altri due formati. Le tre
+     * magie differiscono di una lettera e le tre dimensioni sono 280,
+     * 1288 e 9352: scambiarli da' un pacchetto che non si allinea, non
+     * un pacchetto che si interpreta male. */
+    if (r->magia != PROT_MAGIA_RICH_POOL) return -1;
+    if (r->versione != PROT_VERSIONE) return -2;
+    if (r->crc != prot_crc32(r, SENZA_CRC(prot_richiesta_pool_t))) return -3;
     return 0;
 }
 

@@ -2,7 +2,7 @@
   ******************************************************************************
   * @file    network.h
   * @author  STEdgeAI
-  * @date    2026-10-02 12:58:15
+  * @date    2026-10-16 18:35:41
   * @brief   Minimal description of the generated c-implemention of the network
   ******************************************************************************
   * @attention
@@ -33,7 +33,7 @@
 #define LL_ATON_NETWORK_IN_1_SIZE_BYTES  (4536)
 // Input buffer 2 -- Input_24_out_0
 #define LL_ATON_NETWORK_IN_2_ALIGNMENT   (32)
-#define LL_ATON_NETWORK_IN_2_SIZE_BYTES  (60)
+#define LL_ATON_NETWORK_IN_2_SIZE_BYTES  (48)
 // Input buffer 3 -- Input_1_out_0
 #define LL_ATON_NETWORK_IN_3_ALIGNMENT   (32)
 #define LL_ATON_NETWORK_IN_3_SIZE_BYTES  (1024)

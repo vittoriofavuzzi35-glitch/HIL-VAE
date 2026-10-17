@@ -26,13 +26,13 @@
   #define RAMO_DETTO        "in ascolto, 921600 8N1, ramo VAE"
 #else
   #include "nodo_bordo.h"
-  #define RICHIESTA_T       prot_richiesta_t
-  #define RICHIESTA_MAGIA   PROT_MAGIA_RICH
-  #define RICHIESTA_VALIDA  prot_richiesta_valida
+  #define RICHIESTA_T       prot_richiesta_pool_t
+  #define RICHIESTA_MAGIA   PROT_MAGIA_RICH_POOL
+  #define RICHIESTA_VALIDA  prot_richiesta_pool_valida
   #define NODO_INIT         nodo_bordo_init
   #define NODO_PASSO        nodo_bordo_passo
   #define NODO_IMPOSTA_LOG  nodo_bordo_imposta_log
-  #define RAMO_DETTO        "in ascolto, 921600 8N1"
+  #define RAMO_DETTO        "in ascolto, 921600 8N1, ramo min pooling"
 #endif
 
 /* Quanto si aspetta il resto di un pacchetto di cui si e' gia' vista la
@@ -51,7 +51,9 @@
 #if defined(CICLO_SERIALE_VAE)
   #define ATTESA_CORPO_MS  500u
 #else
-  #define ATTESA_CORPO_MS   50u
+  /* 14 ms di trasmissione: 200 lascia un margine largo senza arrivare
+   * mai a coprire una scheda davvero bloccata. */
+  #define ATTESA_CORPO_MS  200u
 #endif
 
 /* La scrittura invece deve riuscire: se il PC non legge, restare qui non

@@ -192,10 +192,16 @@ void osservazione_passo(osservazione_t *o, const osservazione_ingresso_t *in,
         u[n++] = o->err_integrale[k] / o->cfg.integral_obs_scale;
     /* qui n == OSS_BASE == 48 */
 
+#if !defined(OSS_SENZA_SETTORI)
     /* I settori che entrano sono i RITARDATI: e' cio' che il drone sa
-     * davvero nell'istante in cui decide, non la verita' fisica. */
+     * davvero nell'istante in cui decide, non la verita' fisica.
+     *
+     * Sul ramo VAE questo blocco non c'e': il ToF lo guarda l'encoder
+     * sull'immagine intera, e i dodici minimi servono alla sola mappa.
+     * Vedi i due layout in testa a osservazione.h. */
     for (int k = 0; k < OSS_N_TOF; ++k)
         u[n++] = in->tof_obs[k] / o->cfg.tof_obs_scale;
+#endif
 
     for (int k = 0; k < OSS_N_MAPPA; ++k)
         u[n++] = o->mappa.griglia[k] / o->cfg.map_logodds_clamp;

@@ -1,90 +1,100 @@
-# HIL-VAE — il progetto CubeIDE della scheda
+# HIL-STM32N6 — i due progetti CubeIDE della scheda
 
-Il controllore del VAE che gira sulla **NUCLEO-N657X0-Q**: riceve
-dall'UART i 64 numeri che il drone non sa da se', costruisce
-l'osservazione, fa girare la rete sull'acceleratore Neural-ART e risponde
-con le quattro azioni. Dall'altra parte del cavo c'e' Isaac Lab, nel
-repository della tesi, che aggancia questo progetto come submodule in
-`deploy/scheda/`.
+I controllori della tesi che girano sulla **NUCLEO-N657X0-Q**: ricevono
+dall'UART cio' che il drone non sa da se', costruiscono l'osservazione,
+fanno girare la rete sull'acceleratore Neural-ART e rispondono con le
+quattro azioni. Dall'altra parte del cavo c'e' Isaac Lab, nel repository
+della tesi, che aggancia questo come submodule in `deploy/scheda/`.
 
-Il ramo min-pooling/v6 — quello che ha prodotto i numeri buoni, 2.69 ms per
-passo sul Cortex-M55 — **non e' qui**: il suo C sta in `deploy/c/` e
-`deploy/hil/` del repository della tesi. Un progetto CubeIDE pero' ce l'ha:
-e' `UART_Printf_FSBL`, dentro l'albero del firmware package
-(`.../Examples/UART/UART_Printf/STM32CubeIDE/FSBL/`), ed e' quello da cui
-questo progetto e' stato copiato. Li' convivono i due rami — `nodo_bordo.c`
-accanto a `nodo_bordo_vae.c` — piu' i file che qui non servono: `rete.c` e
-`rete_data.c`, cioe' la rete del v6 **coi pesi dentro**, e i banchi di prova
-`prova_rete.c` e `prova_scheda.c`. Quel progetto non e' versionato da
-nessuna parte: chi riprende il v6 parta da li'.
+    min_pooling/   il ramo v6: dodici settori di min pooling
+    vae/           il ramo definitivo: 64 latenti al posto dei settori
 
-## Cosa c'e'
+Fino al 16/10 qui c'era un progetto solo, il VAE, e stava nella radice.
+I due rami adesso fanno **a bordo lo stesso lavoro** — stessa mappa,
+stesso pooling, stessa quantizzazione, stesso epoch controller — ed e'
+questo che rende confrontabili i loro tempi.
 
-    Application/Inc/      gli header: protocollo, osservazione, mappa,
-                          config_bordo, piu' quelli generati (network.h,
-                          stai_network.h) e la configurazione HAL
-    Application/User/      il codice: main.c, ciclo_seriale.c,
-                          nodo_bordo_vae.c, osservazione.c, mappa.c,
-                          il runtime Neural-ART (ll_aton*.c, ll_sw_*.c)
-                          e la rete generata (network.c, stai_network.c)
-    Application/Startup/   lo startup FSBL
-    STM32N657X0HXQ_AXISRAM2_fsbl.ld   il linker script
-    UART_Printf_FSBL.launch           la configurazione di debug
-    pesi/                  i 939 kB di pesi della rete, da caricare in RAM
-                           a ogni avvio: vedi pesi/LEGGIMI.md
-    UART_Printf.ioc        la configurazione CubeMX. E' quella dell'esempio
-                           ST da cui questo progetto e' stato copiato, non
-                           un .ioc di HIL_VAE_2: aprendola si vede la
-                           configurazione vera della scheda (pinout, clock,
-                           UART), non il progetto del VAE
+## I numeri, 16/10/2026
 
-`mappa.c` e `osservazione.c` sono gli stessi file che sul PC vengono
-compilati in `libcervello.so`: questo repository e' la loro unica copia, e
-il repository della tesi li compila da qui.
+|  | min_pooling | vae |
+|---|---|---|
+| osservazione | 1084 | 1136 |
+| catena a bordo | **2.635 ms** | **11.934 ms** |
+| senza le impronte CRC | 2.635 (non le calcola) | **10.017 ms** |
+| % del budget di 40 ms | 6.6% | 30.4% |
+| di cui inferenza | non misurata | 8.052 ms |
+| MAC | 375.394 | 4.220.462 |
+| epoch | 12: 9 HW in 2 blob EC, 3 SW | 46: 36 HW in 4 blob EC, 10 SW |
+| HIL, 100 missioni | **99/100** | **97/100** |
+| simulazione, 8000 missioni | 93.15% | 97.56% |
+| contatti, code scadute, pacchetti persi | 0 | 0 |
 
-## Tre cose da sapere prima di premere Build
+**ATTENZIONE A CONFRONTARE I TEMPI.** `nodo_bordo_vae.c` calcola due
+impronte CRC32 dentro la finestra cronometrata, `nodo_bordo.c` no: sono
+1,92 ms di sola diagnostica che pesano su un ramo e non sull'altro. Il
+rapporto onesto e' **10,017 contro 2,635, cioe' 3,8x**.
 
-Il progetto **non e' autosufficiente**, e non lo e' per scelta: la
-toolchain ST non si versiona. Chi lo apre si aspetti tre passaggi.
+## Cosa cambia fra i due progetti
 
-**1. Il firmware package va al posto giusto.** `.project` aggancia HAL,
-BSP, CMSIS e `system_stm32n6xx_fsbl.c` come *linked resources* relative a
-`${PARENT-3-PROJECT_LOC}/OneDrive/Desktop/STM/STM32Cube_FW_N6_V1.4.0/Projects/NUCLEO-N657X0-Q/Examples/UART/UART_Printf`.
-Quei link si risolvono solo nella disposizione di cartelle della macchina
-su cui il progetto e' nato. Su un'altra macchina vanno rifatti puntando al
-proprio **STM32Cube_FW_N6 v1.4.0**, oppure si sposta il progetto dentro
-l'albero degli esempi, da cui proviene (l'esempio `UART/UART_Printf`).
+| | min_pooling | vae |
+|---|---|---|
+| simboli | — | `CICLO_SERIALE_VAE`, `OSS_SENZA_SETTORI` |
+| nome della rete | `--name rete` -> `stai_rete_*` | predefinito -> `stai_network_*` |
+| ingressi | 2: scalari(60), mappa(1024) | 3: tof(4536), scalari(48), mappa(1024) |
+| file dei pesi | un `.raw` | tre `.raw` |
+| nodo | `nodo_bordo.c` | `nodo_bordo_vae.c` |
+| ritardo del ToF | a bordo, un passo | non serve: i settori ritardati non entrano |
 
-**2. Gli header del Neural-ART non sono nel repository.** `ll_aton.c`,
-`network.c` e `stai_network.c` includono `ll_aton.h`, `ll_sw.h`,
-`ll_aton_NN_interface.h` e compagnia, che arrivano da
-`C:/ST/STEdgeAI/4.0/scripts/epoch_controller/include`. Attenzione a tre che
-sfuggono, perche' il loro `.c` E' qui mentre il loro `.h` no: `mcu_cache.h`
-e `npu_cache.h` stanno in `Middlewares/ST/AI/Npu/Devices/STM32N6xx/`,
-`ecloader.h` in `Middlewares/ST/AI/Npu/ll_aton/`. Senza **ST Edge AI
-Core 4.0** installato non compila nemmeno coi Drivers a posto.
+Comuni a entrambi: `LL_ATON_PLATFORM=LL_ATON_PLAT_STM32N6`,
+`LL_ATON_OSAL=LL_ATON_OSAL_BARE_METAL`, `LL_ATON_SW_FALLBACK=1`,
+`USE_HAL_DRIVER`, `STM32N657xx`.
 
-**3. I pesi vanno caricati dal debugger, e questo e' il punto che inganna.**
-`network.c` legge i pesi da `0x34200000`, che **non e' la flash esterna**:
-e' npuRAM3, memoria volatile. La rete e' compilata col profilo
-`n6-noextmem` apposta per tenerli li' invece che nella flash da programmare
-a parte, e questo significa che a ogni avvio vanno riscritti — tre comandi
-`restore` nella configurazione di debug, spiegati in `pesi/LEGGIMI.md`
-insieme ai tre indirizzi.
-I tre `.raw` adesso sono nel repository (`pesi/`, 939 kB), quindi chi clona
-ha tutto. Se pero' la configurazione di debug non li carica, il progetto
-compila, la scheda parte e la rete gira su memoria vuota: azioni plausibili
-e prive di significato, senza un messaggio d'errore. Se l'anello si chiude e
-i numeri sono assurdi, e' quasi sempre questo.
+**Niente `LL_ATON_RT_MODE`.** ASYNC e' il default del runtime ed e' cio'
+che l'epoch controller pretende. Non serve configurare interrupt in
+CubeMX: `ll_aton_runtime.c` definisce `NPU0_IRQHandler`, lo startup lo
+dichiara `.weak`, e l'OSAL bare-metal abilita il NVIC da se'. Abilitarlo
+anche in CubeMX genera un handler vuoto con lo stesso nome e il linker
+trova due simboli forti.
 
-## Dettagli che confondono
+## Caricare i pesi
 
-- Il nome dentro `.project` e' **`HIL_VAE_2`**, non `HIL-VAE`: all'import
-  in CubeIDE il progetto compare con quel nome.
-- `UART_Printf_FSBL.launch` porta ancora il nome dell'esempio ST da cui si
-  e' partiti. La configurazione di debug e' giusta, il nome e' storico.
-- La UART e' a **921600 8N1**, non a 115200. A 115200 non si vede niente e
-  sembra che la scheda sia morta.
-- Sul filo passano i pacchetti, non il testo: al posto di `printf` c'e'
-  `ciclo_seriale_log()`, che manda i messaggi dentro un terzo tipo di
-  pacchetto. Il perche' sta in `deploy/hil/LEGGIMI.md`.
+I `.raw` **non** stanno nell'ELF: vanno scritti in npuRAM a mano, e solo
+**dopo** che `npu_accendi()` ha dato clock all'acceleratore e configurato
+i RISAF. Breakpoint sulla riga dopo quella chiamata, poi dalla console
+gdb:
+
+    min_pooling
+      restore <percorso>/min_pooling/pesi/rete_atonbuf.AXISRAM5.raw binary 0x342E0000
+
+    vae
+      restore <percorso>/vae/pesi/network_atonbuf.AXISRAM3.raw binary 0x34200000
+      restore <percorso>/vae/pesi/network_atonbuf.AXISRAM4.raw binary 0x34270000
+      restore <percorso>/vae/pesi/network_atonbuf.AXISRAM5.raw binary 0x342E0000
+
+Verificare **sempre** con `x/8xb <indirizzo>`: otto `0x00` o otto `0xff`
+vogliono dire che il restore non e' passato, e da li' in poi la rete
+lavora su pesi a zero **senza dare nessun errore**.
+
+I pesi stanno in RAM: ogni reset della scheda li cancella. Fra un
+`restore` e la fine di una corsa la sessione di debug non si tocca.
+
+## Le configurazioni di debug
+
+`min_pooling/HIL_POOL.launch` e' quella usata davvero il 16/10.
+`vae/HIL_VAE_2.launch` e' **derivata da quella**, cambiando nome del
+progetto ed ELF: nel progetto VAE la configurazione usata viveva nei
+metadati del workspace e non in un file, e quella che c'era nella
+cartella puntava a `Release/UART_Printf_FSBL.elf`, cioe' a un terzo
+progetto. Controllare sempre, in *Main*, che **Project** e **C/C++
+Application** siano quelli giusti: flashare l'ELF sbagliato non da'
+errore, da' una scheda che risponde male.
+
+## Cosa NON e' qui
+
+Il codice sorgente condiviso — protocollo, osservazione, mappa, settori,
+nodi — vive anche in `deploy/` del repository della tesi, che e' la
+copia da cui si parte. Qui dentro c'e' quella **compilata**, insieme al
+codice generato da ST Edge AI (`rete.c`, `network.c`, `stai_*`), che si
+rigenera dall'ONNX e non si scrive a mano.
+
+Le build (`Debug/`, `Release/`) non sono versionate.

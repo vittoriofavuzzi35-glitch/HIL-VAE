@@ -1,8 +1,5 @@
 /* Generato da genera_vettori.py — non modificare a mano.
- * La configurazione dell'ambiente, senza i vettori di prova.
- *
- * ECCEZIONE del 3/10: il prior della mappa NON e' piu' una costante, perche'
- * i due bracci lo hanno diverso. Vedi il commento qui sotto. */
+ * La configurazione dell'ambiente, senza i vettori di prova. */
 #ifndef CONFIG_BORDO_H
 #define CONFIG_BORDO_H
 

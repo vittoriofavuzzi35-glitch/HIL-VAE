@@ -68,6 +68,7 @@
 #include "protocollo.h"
 #include "nodo_bordo_vae.h"
 #include "osservazione.h"
+#include "settori.h"
 #include "config_bordo.h"
 /* NON preprocessore.h: quello ha le statistiche di uni_arco_v6, e il VAE
  * e' un addestramento a se'. Sui primi 1084 numeri le medie differiscono
@@ -100,15 +101,31 @@ STAI_NETWORK_CONTEXT_DECLARE(vae_ctx, STAI_NETWORK_CONTEXT_SIZE)
 #define VAE_TOF_OFFSET     (-128)
 #define VAE_OSS_SCALA      0.039196539670229f
 #define VAE_OSS_OFFSET     (-1)
-#define VAE_AZIONE_SCALA   0.056314103f
-#define VAE_AZIONE_OFFSET  (11)
+/* L'USCITA CAMBIA A OGNI RIESPORTAZIONE, gli ingressi quasi mai.
+ *
+ * Qui sotto i valori del grafo da 1.2M, letti il 16/10 da
+ * modelli/vae_unito_3in_int8.onnx. Quelli di settembre erano
+ * 0.056314103 e 11: scale diverse dell'8%, che sulle azioni vogliono
+ * dire velocita' comandate sbagliate dell'8% — nessun errore, nessun
+ * avviso, solo un drone che vola male.
+ *
+ * Gli ingressi invece sono rimasti identici, perche' dipendono dal clip
+ * a +-5 della normalizzazione e dal fondo scala del ToF, che non sono
+ * cambiati. Non e' una garanzia: si rileggono comunque. */
+#define VAE_AZIONE_SCALA   0.0611622892320156f
+#define VAE_AZIONE_OFFSET  (13)
 
 /* I 1084 dell'osservazione entrano in DUE buffer separati: i primi 60
  * scalari e i 1024 della mappa. Il quantizzatore li calibra ciascuno per
  * conto suo, ma ha trovato la stessa scala e lo stesso zero — entrambi
  * arrivano saturati a +-5, quindi 5/127.5. Si continua percio' a usare
  * VAE_OSS_SCALA per tutti e due. */
-#define VAE_N_SCALARI      (OSS_BASE + OSS_N_TOF)   /* 60 */
+/* Quanti dei 1072 (o 1084) vanno nell'ingresso "scalari" della rete:
+ * tutto cio' che precede la mappa. Si DERIVA dal layout invece di
+ * scrivere 60 o 48, cosi' cambiare ramo non lascia indietro questo
+ * numero — che e' precisamente il tipo di disallineamento che non da'
+ * errore. Con OSS_SENZA_SETTORI vale 48, altrimenti 60. */
+#define VAE_N_SCALARI      (OSS_BASE + OSS_N_TOF_OSS)
 
 /* L'arena delle attivazioni, letta dal report del generatore:
  *     npuRAM6  0x34350000 - 0x3435C540
@@ -116,7 +133,7 @@ STAI_NETWORK_CONTEXT_DECLARE(vae_ctx, STAI_NETWORK_CONTEXT_SIZE)
  * cambia a ogni rigenerazione della rete: si rilegge nel report, riga
  * "Used memory ranges". */
 #define VAE_ARENA_BASE     0x34350000u
-#define VAE_ARENA_DIM      0xC540u
+#define VAE_ARENA_DIM      0xC530u
 
 /* Le due griglie devono combaciare con quello che il protocollo trasporta:
  * se un giorno cambia il binning del sensore, qui si ferma la compilazione
@@ -139,6 +156,18 @@ STAI_NETWORK_CONTEXT_DECLARE(vae_ctx, STAI_NETWORK_CONTEXT_SIZE)
 #if (OSS_VAE_N != OSS_TOTALE)
   #error "le costanti del VAE non coprono tutta l'osservazione"
 #endif
+/* QUESTO NODO E' PER IL LAYOUT SENZA SETTORI (1136).
+ *
+ * Non e' pignoleria: sul layout vecchio (1148) l'osservazione vuole i
+ * settori RITARDATI, e qui sotto non c'e' piu' nessun ritardo — si
+ * passerebbero i correnti, cioe' informazione che sul drone vero non e'
+ * ancora disponibile. Nessun errore, solo una policy che bara di un
+ * passo. Per tornare a 1148 va rimesso settori_prec come in
+ * nodo_bordo.c, non basta togliere questa riga. */
+#if !defined(OSS_SENZA_SETTORI)
+  #error "nodo_bordo_vae.c vuole OSS_SENZA_SETTORI: vedi il commento qui sopra"
+#endif
+
 #if (VAE_N_SCALARI + OSS_N_MAPPA != OSS_TOTALE)
   #error "scalari e mappa non coprono tutta l'osservazione"
 #endif
@@ -148,6 +177,30 @@ STAI_NETWORK_CONTEXT_DECLARE(vae_ctx, STAI_NETWORK_CONTEXT_SIZE)
  * di partire se non trova tutte e tre le taglie attese. */
 
 static osservazione_t stato;
+
+/* IL MIN POOLING DELLA MAPPA, a bordo anche qui.
+ *
+ * La mappa 32x32 si costruisce dai dodici settori su ENTRAMBI i rami
+ * (vedi il cappello di uni_vae_senza_settori_env.py). Fino al 10/2026 su
+ * questo ramo glieli riduceva il PC e li mandava dentro i 64 float,
+ * mentre v6 — che riceve solo la griglia — se li calcolava da se'. Due
+ * rami con una divisione del lavoro diversa non si confrontano: adesso
+ * li riduce la scheda, dalla stessa immagine 54x42 che gia' le arriva
+ * per l'encoder.
+ *
+ * NESSUN RITARDO, qui. Su v6 serviva perche' i settori RITARDATI
+ * entravano nell'osservazione; su questo ramo non ci entrano piu'
+ * (OSS_SENZA_SETTORI) e la mappa ha sempre voluto i CORRENTI. Un pezzo
+ * di stato in meno da tenere allineato. */
+static settori_t sett;
+static unsigned char valido[PROT_N_PROFONDITA];
+static float settori_cur[OSS_N_TOF];
+
+/* Quanti passi confrontare i nostri settori con quelli del PC, che nel
+ * pacchetto ci sono ancora. Prende in castagna un'inversione fra righe e
+ * colonne al primo secondo invece che in una statistica. */
+#define VAE_PASSI_CONTROLLO  20
+static int passi_controllo;
 static float grezza[OSS_TOTALE];
 static float normalizzata[OSS_VAE_N];
 static int8_t *ingresso_tof;      /* 4536 byte, due canali planari */
@@ -264,6 +317,18 @@ int nodo_bordo_vae_init(void)
 
     stato.cfg = config_bordo();
     stato.avviato = 0;
+
+    /* Finestre adattive sulla griglia del VAE: 54 colonne verso 4 settori
+     * e 42 righe verso 3. Come su v6 si CALCOLANO, perche' le divisioni
+     * non sono intere e le finestre si sovrappongono. */
+    if (settori_init(&sett, PROT_TOF_ZONE_V, PROT_TOF_ZONE_H,
+                     stato.cfg.tof_sectori_v, stato.cfg.tof_settori_h,
+                     stato.cfg.tof_max_range) != 0) {
+        di("finestre del pooling rifiutate");
+        return -7;
+    }
+    passi_controllo = VAE_PASSI_CONTROLLO;
+
     cicli_avvia();
     pronto = 1;
     di("nodo VAE pronto");
@@ -292,8 +357,12 @@ int nodo_bordo_vae_passo(const prot_richiesta_vae_t *rich, prot_risposta_t *risp
     for (int w = 0; w < stato.cfg.n_waypoints; ++w) in.wp_yaw[w] = p[k++];
     for (int j = 0; j < 3; ++j) in.room_min[j] = p[k++];
     for (int j = 0; j < 3; ++j) in.room_max[j] = p[k++];
-    for (int j = 0; j < OSS_N_TOF; ++j) in.tof_obs[j] = p[k++];
-    for (int j = 0; j < OSS_N_TOF; ++j) in.tof_cur[j] = p[k++];
+    /* I ventiquattro settori del PC si SALTANO: adesso li calcola la
+     * scheda. Restano nel pacchetto come controllo, letto piu' sotto
+     * fuori dalla finestra cronometrata. */
+    const float *settori_pc_obs = &p[k];  k += OSS_N_TOF;
+    const float *settori_pc_cur = &p[k];  k += OSS_N_TOF;
+    (void)settori_pc_obs;
     for (int j = 0; j < OSS_N_AZIONI; ++j) in.prev_azioni[j] = p[k++];
     in.wp_idx = (int)rich->wp_idx;
 
@@ -332,7 +401,26 @@ int nodo_bordo_vae_passo(const prot_richiesta_vae_t *rich, prot_risposta_t *risp
 
     uint32_t t0 = cicli_ora();
 
-    /* L'osservazione da 1084: mappa, integrale, settori. Invariata da v6. */
+    /* IL MIN POOLING, a bordo. Va PRIMA di osservazione_passo, perche' e'
+     * da qui che la mappa prende i suoi dodici settori.
+     *
+     * La validita' si ricava dallo zero, come per l'encoder poche righe
+     * piu' sotto: il PC manda 0 dove la zona non ha bersaglio, e una
+     * misura nulla non esiste. Una zona non valida ESCE dal minimo —
+     * non vale zero, che vincerebbe sempre. */
+    for (int j = 0; j < PROT_N_PROFONDITA; ++j)
+        valido[j] = (rich->profondita[j] > 0.0f) ? 1u : 0u;
+    settori_calcola(&sett, rich->profondita, valido, settori_cur);
+    for (int j = 0; j < OSS_N_TOF; ++j) {
+        in.tof_cur[j] = settori_cur[j];   /* la mappa */
+        /* tof_obs non entra nell'osservazione su questo ramo (la guardia
+         * OSS_SENZA_SETTORI lo garantisce). Si riempie lo stesso, cosi'
+         * il campo non resta indefinito. */
+        in.tof_obs[j] = settori_cur[j];
+    }
+
+    /* L'osservazione da 1072: mappa e integrale. Stesso codice di v6,
+     * layout diverso — vedi i due in testa a osservazione.h. */
     osservazione_passo(&stato, &in, (int)rich->primo, grezza);
     oss_vae_normalizza(grezza, normalizzata);
     /* Si quantizzano i 1084 in un pezzo solo e POI si dividono. Non per
@@ -457,6 +545,46 @@ int nodo_bordo_vae_passo(const prot_richiesta_vae_t *rich, prot_risposta_t *risp
                           * VAE_AZIONE_SCALA;
     risp->stato = 0;
     prot_firma_risposta(risp);
+
+    /* IL CONTROLLO DEL POOLING, fuori dalla finestra cronometrata.
+     *
+     * Il PC manda ancora i suoi dodici settori correnti, calcolati dal
+     * simulatore sulla stessa immagine 54x42. Se il nostro pooling e'
+     * giusto i due insiemi coincidono a meno dell'arrotondamento float;
+     * se righe e colonne fossero scambiate lo scarto sarebbe dell'ordine
+     * dei metri e si vede al primo secondo.
+     *
+     * Si guarda solo il CORRENTE perche' su questo ramo il ritardato non
+     * esiste piu'. */
+    if (passi_controllo > 0) {
+        float peggio = 0.0f;
+        for (int j = 0; j < OSS_N_TOF; ++j) {
+            float d = settori_cur[j] - settori_pc_cur[j];
+            if (d < 0.0f) d = -d;
+            if (d > peggio) peggio = d;
+        }
+        --passi_controllo;
+        if (peggio > 1e-3f) {
+            char riga[PROT_LOG_TESTO + 1];
+            int mm = (int)(peggio * 1000.0f);
+            static const char eti[] = "settori scarto ";
+            int n = 0;
+            while (eti[n] != '\0') { riga[n] = eti[n]; ++n; }
+            if (mm > 99999) mm = 99999;
+            int div = 10000, visto = 0;
+            while (div > 0) {
+                int c = (mm / div) % 10;
+                if (c != 0 || visto || div == 1) { riga[n++] = (char)('0' + c); visto = 1; }
+                div /= 10;
+            }
+            riga[n++] = ' '; riga[n++] = 'm'; riga[n++] = 'm';
+            riga[n] = '\0';
+            di(riga);
+            passi_controllo = 0;      /* detto una volta, non a ogni passo */
+        } else if (passi_controllo == 0) {
+            di("settori di bordo d'accordo col PC");
+        }
+    }
 
     /* DIAGNOSTICA: due impronte di cio' che e' entrato nella rete.
      *

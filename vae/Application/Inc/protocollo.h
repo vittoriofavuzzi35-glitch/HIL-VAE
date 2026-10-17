@@ -29,7 +29,7 @@
 #define PROT_MAGIA_LOG    0x4E364C4Du   /* "ML6N": messaggio di testo scheda -> PC */
 #define PROT_VERSIONE     1u
 
-#define PROT_N_INGRESSO   64            /* float, come osservazione_passo */
+#define PROT_N_INGRESSO   64            /* float, come cervello_passo */
 #define PROT_N_AZIONI     4
 
 /* Le strutture viaggiano cosi' come sono: campi a 4 byte, nessun
@@ -129,6 +129,71 @@ typedef struct {
     uint32_t crc;
 } prot_richiesta_vae_t;                      /* 9352 byte */
 
+/* ===================================================================
+ * LA RICHIESTA DEL RAMO MIN POOLING
+ * ===================================================================
+ * Fino al 10/2026 il ramo v6 mandava 64 float e basta, e i dodici
+ * settori glieli riduceva IL PC. Funzionava, ma falsava il confronto con
+ * il VAE: di quel ramo la scheda riceve l'immagine intera e si costruisce
+ * tutto da se', mentre a v6 arrivava un pezzo di catena gia' fatto.
+ * Misurare due rami in cui la divisione del lavoro e' diversa non misura
+ * le due reti.
+ *
+ * Adesso attraversa il cavo la GRIGLIA, e il minimo per settore lo fa la
+ * scheda con settori.c. Le due catene diventano simmetriche:
+ *
+ *   v6     18x14 -> settori.c -> 12 settori -> mappa -> rete
+ *   VAE    54x42 -> settori.c -> 12 settori -> mappa -> rete
+ *                \-> encoder -> 64 latenti --/
+ *
+ * COSA VIAGGIA, E PERCHE' COSI'
+ *
+ *   - profondita' in METRI, un float per zona, 0 = zona non valida.
+ *     Stessa convenzione del ramo VAE: la validita' non si manda perche'
+ *     si ricava dallo zero, e una distanza nulla non esiste (il
+ *     simulatore satura a tof_min_range = 0.05 m).
+ *
+ *   - UNA griglia sola, quella CORRENTE. Il ritardo di un update che
+ *     l'osservazione vuole — tof_latency_steps = 1 — lo tiene la scheda,
+ *     come lo terrebbe il drone vero: mandare anche la griglia vecchia
+ *     significherebbe far ricordare al PC qualcosa che e' memoria di
+ *     bordo, ed e' esattamente l'errore che questo pacchetto corregge.
+ *
+ *   - i 64 float di v6 restano IDENTICI, ventiquattro settori compresi.
+ *     Non servono piu' al calcolo: la scheda li usa come CONTROLLO, e
+ *     confronta i propri dodici minimi con quelli del PC nei primi passi.
+ *     Se le righe e le colonne fossero scambiate — l'errore facile, visto
+ *     che tof_binning e' (larghezza, altezza) e il tensore e' (altezza,
+ *     larghezza) — lo scarto salta fuori al primo secondo invece che in
+ *     una statistica su cinquanta missioni.
+ *
+ * QUANTO COSTA. 1288 byte contro 280. A 921600 8N1 sono 14 ms per passo
+ * invece di 3.4, contro i 102 del ramo VAE. Il budget dei 40 ms riguarda
+ * il calcolo A BORDO, che il contatore DWT misura per conto suo.
+ *
+ * LA RISPOSTA NON CAMBIA. Sempre prot_risposta_t, cosi' il lato PC che
+ * legge le risposte resta comune a tutti e tre i formati. */
+#define PROT_MAGIA_RICH_POOL  0x4E36504Du   /* "MP6N": richiesta min pooling */
+
+/* La griglia di v6: tof_binning = (18, 14) e' (LARGHEZZA, ALTEZZA), e il
+ * tensore della profondita' e' (altezza, larghezza). Scritto qui perche'
+ * invertirli non da' nessun errore: da' dodici numeri plausibili e
+ * sbagliati. */
+#define PROT_POOL_ZONE_V     14
+#define PROT_POOL_ZONE_H     18
+#define PROT_N_POOL          (PROT_POOL_ZONE_V * PROT_POOL_ZONE_H)   /* 252 */
+
+typedef struct {
+    uint32_t magia;                          /* PROT_MAGIA_RICH_POOL */
+    uint32_t versione;
+    uint32_t sequenza;
+    int32_t  wp_idx;
+    int32_t  primo;
+    float    ingresso[PROT_N_INGRESSO];      /* 64, come v6; i 24 settori sono diagnostica */
+    float    profondita[PROT_N_POOL];        /* metri, 0 = zona non valida */
+    uint32_t crc;
+} prot_richiesta_pool_t;                     /* 1288 byte */
+
 /* CRC-32, polinomio standard riflesso 0xEDB88320.
  * Implementato a bit invece che con tabella: 64 word sono niente, e una
  * tabella da 1 kB per questo non vale lo spazio in RAM. */
@@ -137,12 +202,14 @@ uint32_t prot_crc32(const void *dati, uint32_t n_byte);
 /* Verificano magia, versione e CRC. Tornano 0 se il pacchetto e' buono. */
 int prot_richiesta_valida(const prot_richiesta_t *r);
 int prot_richiesta_vae_valida(const prot_richiesta_vae_t *r);
+int prot_richiesta_pool_valida(const prot_richiesta_pool_t *r);
 int prot_risposta_valida(const prot_risposta_t *r);
 int prot_log_valido(const prot_log_t *r);
 
 /* Riempiono il CRC prima di spedire. */
 void prot_firma_richiesta(prot_richiesta_t *r);
 void prot_firma_richiesta_vae(prot_richiesta_vae_t *r);
+void prot_firma_richiesta_pool(prot_richiesta_pool_t *r);
 void prot_firma_risposta(prot_risposta_t *r);
 
 /* Riempie testo, lunghezza e CRC da una stringa C, troncando se serve. */
